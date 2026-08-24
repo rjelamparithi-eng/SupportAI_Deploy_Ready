@@ -31,8 +31,7 @@ else:
 
 def get_collection():
     return chroma_client.get_or_create_collection(
-        name="business_docs",
-        metadata={"hnsw:space": "cosine"},
+        name="business_docs"
     )
 
 
