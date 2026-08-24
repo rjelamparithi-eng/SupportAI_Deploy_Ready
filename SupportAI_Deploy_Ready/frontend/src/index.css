@@ -1,0 +1,59 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-obsidian text-mist font-sans;
+    font-feature-settings: "ss01" on, "cv01" on;
+  }
+  
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #7c3aed #1a1a2e;
+  }
+  
+  *::-webkit-scrollbar {
+    width: 6px;
+  }
+  
+  *::-webkit-scrollbar-track {
+    background: #1a1a2e;
+  }
+  
+  *::-webkit-scrollbar-thumb {
+    background: #7c3aed;
+    border-radius: 3px;
+  }
+}
+
+@layer components {
+  .glass {
+    @apply bg-ghost/60 backdrop-blur-xl border border-white/5;
+  }
+  
+  .glass-card {
+    @apply glass rounded-2xl;
+  }
+  
+  .btn-primary {
+    @apply bg-plasma hover:bg-plasma/80 text-white font-semibold px-6 py-3 rounded-xl
+           transition-all duration-200 hover:shadow-lg hover:shadow-plasma/30 
+           active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  
+  .btn-ghost {
+    @apply border border-white/10 hover:border-plasma/50 hover:bg-plasma/10 text-mist
+           font-semibold px-6 py-3 rounded-xl transition-all duration-200 active:scale-95;
+  }
+  
+  .input-field {
+    @apply w-full bg-void border border-white/10 rounded-xl px-4 py-3
+           text-mist placeholder-mist/30 focus:outline-none focus:border-plasma/60
+           focus:ring-2 focus:ring-plasma/20 transition-all duration-200;
+  }
+  
+  .glow-text {
+    text-shadow: 0 0 40px rgba(124, 58, 237, 0.5);
+  }
+}
