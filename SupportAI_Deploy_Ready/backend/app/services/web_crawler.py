@@ -4,9 +4,15 @@ import logging
 from dataclasses import dataclass, field
 from urllib.parse import urljoin, urlparse, urlunparse
 
-from playwright.async_api import async_playwright
+import httpx
+from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
+
+try:
+    from playwright.async_api import async_playwright
+except Exception:
+    async_playwright = None
 
 
 @dataclass
@@ -59,14 +65,94 @@ class WebsiteCrawler:
             return False
 
         parsed = urlparse(normalized)
-        if parsed.scheme in {"mailto", "tel"}:
-            return False
-
         base_netloc = urlparse(base_url).netloc
-        if parsed.netloc and parsed.netloc != base_netloc:
-            return False
+        return not parsed.netloc or parsed.netloc == base_netloc
 
-        return True
+    def _reset_for_fallback(self) -> None:
+        self.visited.clear()
+        self.discovered = {self.start_url} if self.start_url else set()
+        self.documents.clear()
+        self.js_urls.clear()
+        self.api_responses.clear()
+
+    async def _crawl_http(self) -> list[CrawledDocument]:
+        """Render-friendly fallback that does not require Chromium."""
+        if not self.start_url:
+            return []
+
+        queue: list[tuple[str, int]] = [(self.start_url, 0)]
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/126.0.0.0 Safari/537.36"
+            ),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        }
+
+        async with httpx.AsyncClient(
+            follow_redirects=True,
+            timeout=httpx.Timeout(30.0),
+            headers=headers,
+        ) as client:
+            while queue and len(self.visited) < self.max_pages:
+                url, depth = queue.pop(0)
+                if url in self.visited or depth > self.max_depth:
+                    continue
+
+                self.visited.add(url)
+                try:
+                    response = await client.get(url)
+                    response.raise_for_status()
+                except Exception as exc:
+                    logger.warning("HTTP fallback failed for %s: %s", url, exc)
+                    continue
+
+                content_type = response.headers.get("content-type", "")
+                if "text/html" not in content_type.lower():
+                    continue
+
+                soup = BeautifulSoup(response.text, "html.parser")
+
+                for tag in soup(["script", "style", "noscript", "svg", "canvas"]):
+                    tag.decompose()
+
+                title = "Untitled"
+                if soup.title and soup.title.string:
+                    title = soup.title.string.strip() or "Untitled"
+
+                text = " ".join(soup.get_text(" ", strip=True).split())
+                if text:
+                    self.documents.append(
+                        CrawledDocument(
+                            url=str(response.url),
+                            title=title,
+                            text=text,
+                            metadata={
+                                "source_url": str(response.url),
+                                "title": title,
+                                "scrape_mode": "http-fallback",
+                            },
+                        )
+                    )
+
+                for anchor in soup.find_all("a", href=True):
+                    normalized = self.normalize_url(anchor.get("href", ""), str(response.url))
+                    if not normalized or not self.is_internal_link(normalized, self.start_url):
+                        continue
+                    if normalized in self.visited or normalized in self.discovered:
+                        continue
+                    if len(self.visited) + len(queue) >= self.max_pages:
+                        break
+                    self.discovered.add(normalized)
+                    queue.append((normalized, depth + 1))
+
+        logger.info(
+            "HTTP fallback crawl complete: pages=%d documents=%d",
+            len(self.visited),
+            len(self.documents),
+        )
+        return self.documents
 
     async def handle_response(self, response) -> None:
         try:
@@ -87,99 +173,57 @@ class WebsiteCrawler:
             pass
 
     async def extract_page(self, page, url: str) -> list[str]:
-        title = ""
         try:
             title = await page.title()
         except Exception:
             title = ""
 
-        text = ""
         try:
             text = await page.locator("body").inner_text()
         except Exception:
             text = ""
 
-        if not text.strip():
-            try:
-                text = await page.evaluate(
-                    """
-                    () => {
-                        const selectors = ['main', 'article', 'section', 'div', 'p', 'li', 'h1', 'h2', 'h3'];
-                        const parts = [];
-                        for (const selector of selectors) {
-                            const nodes = document.querySelectorAll(selector);
-                            for (const node of nodes) {
-                                const value = (node?.innerText || node?.textContent || '').trim();
-                                if (value) parts.push(value);
-                            }
-                        }
-                        return parts.join(' ');
-                    }
-                    """
-                )
-            except Exception:
-                text = ""
-
         cleaned_text = " ".join(text.split()) if text else ""
         if cleaned_text:
+            clean_title = (title or "Untitled").strip() or "Untitled"
             self.documents.append(
                 CrawledDocument(
                     url=url,
-                    title=(title or "Untitled").strip() or "Untitled",
+                    title=clean_title,
                     text=cleaned_text,
-                    source_type="webpage",
-                    content_type="text/html",
                     metadata={
                         "source_url": url,
-                        "title": (title or "Untitled").strip() or "Untitled",
+                        "title": clean_title,
+                        "scrape_mode": "playwright",
                     },
                 )
             )
 
-        try:
-            scripts = await page.locator("script[src]").evaluate_all(
-                """
-                elements => elements
-                    .map(element => element.src)
-                    .filter(Boolean)
-                """
-            )
-        except Exception:
-            scripts = []
-
-        for script_url in scripts:
-            normalized = self.normalize_url(script_url, url)
-            if normalized:
-                self.js_urls.add(normalized)
-
         links: list[str] = []
         try:
             hrefs = await page.locator("a[href]").evaluate_all(
-                """
-                elements => elements
-                    .map(element => element.href)
-                    .filter(Boolean)
-                """
+                "elements => elements.map(e => e.href).filter(Boolean)"
             )
         except Exception:
             hrefs = []
 
         for href in hrefs:
             normalized = self.normalize_url(href, url)
-            if not normalized:
+            if not normalized or not self.is_internal_link(normalized, self.start_url):
                 continue
-            if not self.is_internal_link(normalized, url):
-                continue
-            if normalized not in self.discovered and normalized not in self.visited:
-                self.discovered.add(normalized)
             links.append(normalized)
 
         return links
 
-    async def crawl(self) -> list[CrawledDocument]:
+    async def _crawl_playwright(self) -> list[CrawledDocument]:
+        if async_playwright is None:
+            raise RuntimeError("Playwright package is unavailable")
+
         queue: list[tuple[str, int]] = [(self.start_url, 0)]
 
         async with async_playwright() as playwright:
+            # This may fail on hosts where the Chromium binary is not bundled.
+            # crawl() catches that and automatically uses the HTTP fallback.
             browser = await playwright.chromium.launch(headless=True)
             context = await browser.new_context(
                 user_agent=(
@@ -193,61 +237,27 @@ class WebsiteCrawler:
             try:
                 while queue and len(self.visited) < self.max_pages:
                     url, depth = queue.pop(0)
-                    if url in self.visited:
-                        continue
-                    if depth > self.max_depth:
+                    if url in self.visited or depth > self.max_depth:
                         continue
 
                     self.visited.add(url)
-                    logger.info(
-                        "Crawling [%d/%d] depth=%d: %s",
-                        len(self.visited),
-                        self.max_pages,
-                        depth,
-                        url,
-                    )
-
                     page = None
                     try:
                         page = await context.new_page()
                         page.on("response", self.handle_response)
                         await page.goto(url, wait_until="domcontentloaded", timeout=60_000)
-                        await page.wait_for_timeout(3000)
-
-                        try:
-                            max_height = await page.evaluate(
-                                """
-                                () => {
-                                    const body = document.body;
-                                    return body ? body.scrollHeight : 0;
-                                }
-                                """
-                            )
-                            if max_height:
-                                step = max(200, min(1200, int(max_height / 8)))
-                                for position in range(step, int(max_height) + step, step):
-                                    await page.evaluate(
-                                        "(position) => { window.scrollTo(0, position); }",
-                                        position,
-                                    )
-                                    await page.wait_for_timeout(200)
-                                await page.evaluate("""() => { window.scrollTo(0, 0); }""")
-                        except Exception as exc:
-                            logger.warning("Scroll/evaluate failed for %s: %s", url, exc)
+                        await page.wait_for_timeout(1500)
 
                         links = await self.extract_page(page, url)
                         for link in links:
-                            if link in self.visited:
-                                continue
-                            if link in self.discovered:
+                            if link in self.visited or link in self.discovered:
                                 continue
                             if len(self.visited) + len(queue) >= self.max_pages:
                                 break
                             self.discovered.add(link)
                             queue.append((link, depth + 1))
-                        logger.info("Successfully scraped: %s", url)
                     except Exception as exc:
-                        logger.warning("Failed to crawl %s: %s", url, exc)
+                        logger.warning("Failed to crawl %s with Playwright: %s", url, exc)
                     finally:
                         if page is not None:
                             try:
@@ -265,12 +275,23 @@ class WebsiteCrawler:
                 except Exception:
                     pass
 
-        logger.info(
-            "Crawl complete: pages=%d documents=%d",
-            len(self.visited),
-            len(self.documents),
-        )
         return self.documents
+
+    async def crawl(self) -> list[CrawledDocument]:
+        if not self.start_url:
+            return []
+
+        # Try Playwright first. On Render/free hosting, Chromium may not be
+        # available in the runtime image, so automatically fall back to HTTP.
+        try:
+            documents = await self._crawl_playwright()
+            if documents:
+                return documents
+        except Exception as exc:
+            logger.warning("Playwright unavailable; using HTTP fallback: %s", exc)
+
+        self._reset_for_fallback()
+        return await self._crawl_http()
 
 
 async def crawl_website(
