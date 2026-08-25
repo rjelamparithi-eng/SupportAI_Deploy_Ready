@@ -86,6 +86,9 @@ Answer:"""
                 "prompt": full_prompt,
                 "system": system_prompt,
                 "stream": False,
+                "options": {
+                    "temperature": 0.1
+                }
             },
         )
         response.raise_for_status()
