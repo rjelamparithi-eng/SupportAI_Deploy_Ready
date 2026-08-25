@@ -152,12 +152,38 @@ def index_chunks(business_id: str, chunks: List[str]):
         except Exception:
             pass
 
-    collection.add(
-        documents=chunks,
-        embeddings=embeddings,
-        ids=ids,
-        metadatas=[{"business_id": business_id, "chunk_type": "document"} for _ in chunks],
-    )
+    # Add to Chroma in smaller batches
+        chroma_batch_size = 50
+        
+        metadatas = [
+            {
+                "business_id": business_id,
+                "chunk_type": "document"
+            }
+            for _ in chunks
+        ]
+        
+        for i in range(
+            0,
+            len(chunks),
+            chroma_batch_size
+        ):
+        
+            end = i + chroma_batch_size
+        
+            print(
+                f"[CHROMA] Indexing "
+                f"{i + 1}-"
+                f"{min(end, len(chunks))} "
+                f"of {len(chunks)}"
+            )
+        
+            collection.add(
+                documents=chunks[i:end],
+                embeddings=embeddings[i:end],
+                ids=ids[i:end],
+                metadatas=metadatas[i:end],
+            )
 
 
 def index_admin_answer(business_id: str, question: str, qa_text: str):
