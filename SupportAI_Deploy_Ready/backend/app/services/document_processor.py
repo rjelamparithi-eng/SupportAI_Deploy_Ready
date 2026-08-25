@@ -65,26 +65,61 @@ def process_file(filename: str, content: bytes) -> List[str]:
 
 # ─── WEB SCRAPING ────────────────────────────────────────────────────────────
 
-async def process_url(url: str, crawl: bool = False) -> List[str]:
-    """Crawl a website and return usable text chunks for indexing."""
-    documents = []
+async def process_url(url: str, crawl: bool = True) -> List[str]:
+    """Crawl multiple website pages and return text chunks for indexing."""
 
-    if crawl:
-        documents = await crawl_website(url, max_pages=10, max_depth=2)
-    else:
-        documents = await crawl_website(url, max_pages=5, max_depth=1)
+    print(f"[SCRAPER] Starting crawl: {url}")
+
+    # Always crawl multiple internal pages
+    documents = await crawl_website(
+        url,
+        max_pages=30,
+        max_depth=4
+    )
+
+    print(f"[SCRAPER] Pages crawled: {len(documents)}")
 
     if not documents:
         raise ValueError("No content could be scraped from the URL.")
 
     results: List[str] = []
+    seen = set()
+
     for document in documents:
         text = document.text.strip()
+
         if not text:
             continue
-        results.extend(chunk_text(text, chunk_size=500, overlap=50))
+
+        print(
+            f"[SCRAPER] Page: {document.url} | "
+            f"Characters: {len(text)}"
+        )
+
+        # Add page information to improve chatbot answers
+        page_text = (
+            f"Page: {document.title}\n"
+            f"URL: {document.url}\n\n"
+            f"{text}"
+        )
+
+        page_chunks = chunk_text(
+            page_text,
+            chunk_size=350,
+            overlap=60
+        )
+
+        for chunk in page_chunks:
+            # Avoid duplicate chunks
+            if chunk not in seen:
+                seen.add(chunk)
+                results.append(chunk)
+
+    print(f"[SCRAPER] Total chunks created: {len(results)}")
 
     if not results:
-        raise ValueError("No usable text content found in the scraped website.")
+        raise ValueError(
+            "No usable text content found in the scraped website."
+        )
 
     return results
