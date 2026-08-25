@@ -260,12 +260,53 @@ async def firecrawl_batch_scrape(
             for item in data:
 
                 markdown = (
-                    item.get("markdown")
-                    or ""
-                ).strip()
+    item.get("markdown")
+    or ""
+).strip()
 
-                if not markdown:
-                    continue
+html = (
+    item.get("html")
+    or ""
+).strip()
+
+
+# If Firecrawl markdown is too small,
+# try extracting text from the rendered HTML.
+if len(markdown.split()) < 40 and html:
+
+    soup = BeautifulSoup(
+        html,
+        "html.parser"
+    )
+
+    for tag in soup([
+        "script",
+        "style",
+        "noscript",
+        "svg",
+        "canvas"
+    ]):
+        tag.decompose()
+
+    html_text = " ".join(
+        soup.get_text(
+            " ",
+            strip=True
+        ).split()
+    )
+
+    # Use whichever contains more useful content
+    if len(html_text) > len(markdown):
+        markdown = html_text
+
+
+# Do not train the chatbot using tiny JS shells
+if len(markdown.split()) < 20:
+    print(
+        "[FIRECRAWL] Skipping tiny page: "
+        f"{len(markdown)} characters"
+    )
+    continue
 
                 metadata = (
                     item.get("metadata")
