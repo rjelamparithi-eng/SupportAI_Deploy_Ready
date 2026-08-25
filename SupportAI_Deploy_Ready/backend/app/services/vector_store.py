@@ -41,25 +41,65 @@ def _ollama_headers() -> dict:
     return {}
 
 
-def _nomic_embeddings(texts: List[str], task_type: str) -> List[List[float]]:
-    response = requests.post(
-        "https://api-atlas.nomic.ai/v1/embedding/text",
-        headers={
-            "Authorization": f"Bearer {NOMIC_API_KEY}",
-            "Content-Type": "application/json",
-        },
-        json={
-            "model": NOMIC_EMBED_MODEL,
-            "texts": texts,
-            "task_type": task_type,
-        },
-        timeout=120,
+def _nomic_embeddings(
+    texts: List[str],
+    task_type: str
+) -> List[List[float]]:
+
+    all_embeddings: List[List[float]] = []
+
+    # Send only a few chunks per request
+    batch_size = 8
+
+    print(
+        f"[EMBED] Total texts: {len(texts)} | "
+        f"Batch size: {batch_size}"
     )
-    response.raise_for_status()
-    data = response.json()
-    if "embeddings" not in data:
-        raise ValueError(f"Unexpected Nomic embedding response format: {data}")
-    return data["embeddings"]
+
+    for i in range(0, len(texts), batch_size):
+
+        batch = texts[i:i + batch_size]
+
+        print(
+            f"[EMBED] Processing "
+            f"{i + 1}-{min(i + batch_size, len(texts))} "
+            f"of {len(texts)}"
+        )
+
+        response = requests.post(
+            "https://api-atlas.nomic.ai/v1/embedding/text",
+            headers={
+                "Authorization": f"Bearer {NOMIC_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": NOMIC_EMBED_MODEL,
+                "texts": batch,
+                "task_type": task_type,
+            },
+            timeout=120,
+        )
+
+        response.raise_for_status()
+
+        data = response.json()
+
+        if "embeddings" not in data:
+            raise ValueError(
+                f"Unexpected Nomic embedding "
+                f"response format: {data}"
+            )
+
+        all_embeddings.extend(
+            data["embeddings"]
+        )
+
+    print(
+        f"[EMBED] Completed: "
+        f"{len(all_embeddings)} embeddings"
+    )
+
+    return all_embeddings
 
 
 def _ollama_embeddings(texts: List[str]) -> List[List[float]]:
