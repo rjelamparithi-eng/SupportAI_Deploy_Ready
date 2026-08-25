@@ -148,30 +148,20 @@ async def firecrawl_batch_scrape(
     }
 
     payload = {
-    "urls": urls,
-    "ignoreInvalidURLs": True,
-
-    # Get both markdown and rendered HTML
-    "formats": [
-        "markdown",
-        "html"
-    ],
-
-    # IMPORTANT:
-    # KEC React content may be outside Firecrawl's
-    # detected <main> section.
-    "onlyMainContent": False,
-
-    # Give React more time to load
-    "waitFor": 5000,
-
-    "timeout": 120000,
-
-    "parsers": ["pdf"]
-}
+        "urls": urls,
+        "ignoreInvalidURLs": True,
+        "formats": [
+            "markdown",
+            "html"
+        ],
+        "onlyMainContent": False,
+        "waitFor": 5000,
+        "timeout": 120000,
+        "parsers": ["pdf"]
+    }
 
     async with httpx.AsyncClient(
-        timeout=90.0,
+        timeout=150.0,
         follow_redirects=True
     ) as client:
 
@@ -258,26 +248,26 @@ async def firecrawl_batch_scrape(
             ) or []
 
             for item in data:
+
                 markdown = (
                     item.get("markdown")
                     or ""
                 ).strip()
-                
+
                 html = (
                     item.get("html")
                     or ""
                 ).strip()
-                
-                
-                # If Firecrawl markdown is too small,
-                # try extracting text from the rendered HTML.
+
+                # If markdown is too small,
+                # extract text from rendered HTML
                 if len(markdown.split()) < 40 and html:
-                
+
                     soup = BeautifulSoup(
                         html,
                         "html.parser"
                     )
-                
+
                     for tag in soup([
                         "script",
                         "style",
@@ -286,39 +276,39 @@ async def firecrawl_batch_scrape(
                         "canvas"
                     ]):
                         tag.decompose()
-                
+
                     html_text = " ".join(
                         soup.get_text(
                             " ",
                             strip=True
                         ).split()
                     )
-                
-                    # Use whichever contains more useful content
+
                     if len(html_text) > len(markdown):
                         markdown = html_text
-                
-                
-                # Do not train the chatbot using tiny JS shells
+
+                # Ignore useless tiny JS pages
                 if len(markdown.split()) < 20:
+
                     print(
-                        "[FIRECRAWL] Skipping tiny page: "
-                        f"{len(markdown)} characters"
+                        "[FIRECRAWL] "
+                        "Skipping tiny page | "
+                        f"Characters={len(markdown)}"
                     )
+
                     continue
-                
-                                metadata = (
-                                    item.get("metadata")
-                                    or {}
-                                )
-                
-                                page_url = (
-                                    metadata.get("sourceURL")
-                                    or
-                                    metadata.get("url")
-                                    or
-                                    ""
-                                )
+
+                metadata = (
+                    item.get("metadata")
+                    or {}
+                )
+
+                page_url = (
+                    metadata.get("sourceURL")
+                    or metadata.get("url")
+                    or ""
+                )
+
                 # DEBUG
                 print(
                     f"[FIRECRAWL] CONTENT "
@@ -326,27 +316,26 @@ async def firecrawl_batch_scrape(
                     f"Words={len(markdown.split())} | "
                     f"Characters={len(markdown)}"
                 )
-                
-                                title = (
-                                    metadata.get("title")
-                                    or
-                                    "Untitled"
-                                )
-                
-                                documents.append(
-                                    CrawledDocument(
-                                        url=page_url,
-                                        title=title,
-                                        text=markdown,
-                                        metadata={
-                                            **metadata,
-                                            "source_url": page_url,
-                                            "title": title,
-                                            "scrape_mode":
-                                                "firecrawl-map-batch"
-                                        }
-                                    )
-                                )
+
+                title = (
+                    metadata.get("title")
+                    or "Untitled"
+                )
+
+                documents.append(
+                    CrawledDocument(
+                        url=page_url,
+                        title=title,
+                        text=markdown,
+                        metadata={
+                            **metadata,
+                            "source_url": page_url,
+                            "title": title,
+                            "scrape_mode":
+                                "firecrawl-map-batch"
+                        }
+                    )
+                )
 
             next_url = current.get("next")
 
@@ -368,6 +357,7 @@ async def firecrawl_batch_scrape(
     )
 
     return documents
+    
 async def firecrawl_crawl(
     url: str,
     max_pages: int,
