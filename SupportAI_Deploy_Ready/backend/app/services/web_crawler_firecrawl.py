@@ -148,19 +148,27 @@ async def firecrawl_batch_scrape(
     }
 
     payload = {
-        "urls": urls,
-        "ignoreInvalidURLs": True,
-        "formats": ["markdown"],
-        "onlyMainContent": True,
+    "urls": urls,
+    "ignoreInvalidURLs": True,
 
-        # Give JavaScript time to render
-        "waitFor": 2000,
+    # Get both markdown and rendered HTML
+    "formats": [
+        "markdown",
+        "html"
+    ],
 
-        "timeout": 60000,
+    # IMPORTANT:
+    # KEC React content may be outside Firecrawl's
+    # detected <main> section.
+    "onlyMainContent": False,
 
-        # Allow PDF parsing
-        "parsers": ["pdf"]
-    }
+    # Give React more time to load
+    "waitFor": 5000,
+
+    "timeout": 120000,
+
+    "parsers": ["pdf"]
+}
 
     async with httpx.AsyncClient(
         timeout=90.0,
