@@ -855,8 +855,8 @@ async def crawl_website(
 
             documents = await firecrawl_crawl(
                 url,
-                max_pages,
-                max_depth
+                min(max_pages, 20),
+                min(max_depth, 3)
             )
 
             if documents:
