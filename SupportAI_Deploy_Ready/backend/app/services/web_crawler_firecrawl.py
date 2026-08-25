@@ -320,6 +320,13 @@ if len(markdown.split()) < 20:
                     or
                     ""
                 )
+# DEBUG
+print(
+    f"[FIRECRAWL] CONTENT "
+    f"{page_url} | "
+    f"Words={len(markdown.split())} | "
+    f"Characters={len(markdown)}"
+)
 
                 title = (
                     metadata.get("title")
@@ -396,17 +403,18 @@ async def firecrawl_crawl(
         "ignoreQueryParameters": True,
 
         "scrapeOptions": {
-            "formats": ["markdown"],
+    "formats": [
+        "markdown",
+        "html"
+    ],
 
-            "onlyMainContent": True,
+    "onlyMainContent": False,
 
-            # Give JavaScript time to render
-            "waitFor": 2000,
+    # Give React/JavaScript more time to load
+    "waitFor": 5000,
 
-            # Also support PDF pages when possible
-            "parsers": ["pdf"]
-        }
-    }
+    "parsers": ["pdf"]
+}
 
     timeout = httpx.Timeout(
         90.0,
