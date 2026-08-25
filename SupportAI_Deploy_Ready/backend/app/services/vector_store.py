@@ -202,16 +202,100 @@ def index_admin_answer(business_id: str, question: str, qa_text: str):
         raise RuntimeError(f"ChromaDB upsert failed: {e}")
 
 
-def query_chunks(business_id: str, query: str, n_results: int = 8) -> List[str]:
+def query_chunks(
+    business_id: str,
+    query: str,
+    n_results: int = 12
+) -> List[str]:
+
     collection = get_collection()
-    query_embedding = get_embeddings([query], task_type="search_query")[0]
+
+    print(
+        f"[RETRIEVAL] Business ID: {business_id}"
+    )
+    print(
+        f"[RETRIEVAL] Question: {query}"
+    )
+
+    # Check how many chunks exist for this business
+    try:
+        stored = collection.get(
+            where={"business_id": business_id}
+        )
+
+        print(
+            f"[RETRIEVAL] Stored chunks: "
+            f"{len(stored.get('ids', []))}"
+        )
+
+    except Exception as e:
+        print(
+            f"[RETRIEVAL] Count error: {e}"
+        )
+
+    # Create search-query embedding
+    query_embedding = get_embeddings(
+        [query],
+        task_type="search_query"
+    )[0]
 
     results = collection.query(
         query_embeddings=[query_embedding],
         n_results=n_results,
         where={"business_id": business_id},
+        include=[
+            "documents",
+            "distances",
+            "metadatas"
+        ],
     )
 
-    if results["documents"] and results["documents"][0]:
-        return results["documents"][0]
-    return []
+    documents = (
+        results.get("documents", [[]])[0]
+        if results.get("documents")
+        else []
+    )
+
+    distances = (
+        results.get("distances", [[]])[0]
+        if results.get("distances")
+        else []
+    )
+
+    metadatas = (
+        results.get("metadatas", [[]])[0]
+        if results.get("metadatas")
+        else []
+    )
+
+    print(
+        f"[RETRIEVAL] Results returned: "
+        f"{len(documents)}"
+    )
+
+    for i, document in enumerate(documents):
+
+        distance = (
+            distances[i]
+            if i < len(distances)
+            else "?"
+        )
+
+        metadata = (
+            metadatas[i]
+            if i < len(metadatas)
+            else {}
+        )
+
+        print(
+            f"[RETRIEVAL] RESULT {i + 1} "
+            f"| Distance={distance} "
+            f"| Metadata={metadata}"
+        )
+
+        print(
+            f"[RETRIEVAL] TEXT: "
+            f"{document[:500]}"
+        )
+
+    return documents
