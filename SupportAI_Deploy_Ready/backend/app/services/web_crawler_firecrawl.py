@@ -402,18 +402,18 @@ async def firecrawl_crawl(
         "ignoreQueryParameters": True,
 
         "scrapeOptions": {
-    "formats": [
-        "markdown",
-        "html"
-    ],
-
-    "onlyMainContent": False,
-
-    # Give React/JavaScript more time to load
-    "waitFor": 5000,
-
-    "parsers": ["pdf"]
-}
+            "formats": [
+                "markdown",
+                "html"
+            ],
+        
+            "onlyMainContent": False,
+        
+            # Give React/JavaScript more time to load
+            "waitFor": 5000,
+        
+            "parsers": ["pdf"]
+        }
 
     timeout = httpx.Timeout(
         90.0,
