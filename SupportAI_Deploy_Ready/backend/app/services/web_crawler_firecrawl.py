@@ -404,6 +404,7 @@ async def firecrawl_crawl(
         
             "parsers": ["pdf"]
         }
+    }
 
     timeout = httpx.Timeout(
         90.0,
