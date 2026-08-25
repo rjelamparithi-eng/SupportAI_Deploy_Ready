@@ -440,7 +440,7 @@ async def firecrawl_crawl(
         status_data = None
 
         # Wait maximum ~3 minutes
-        for _ in range(90):
+        for _ in range(120):
 
             await asyncio.sleep(2)
 
@@ -892,16 +892,7 @@ async def crawl_website(
         "[CRAWLER] Using HTTP fallback"
     )
 
-    documents = await http_fallback(
-        url,
-        max_pages,
-        max_depth
+    raise ValueError(
+        "JavaScript website crawl could not finish. "
+        "Please retry with a smaller crawl size."
     )
-
-    if not documents:
-
-        raise ValueError(
-            "No website content could be scraped."
-        )
-
-    return documents
