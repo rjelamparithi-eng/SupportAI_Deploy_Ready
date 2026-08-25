@@ -129,63 +129,152 @@ def get_embeddings(texts: List[str], task_type: str = "search_document") -> List
     return _ollama_embeddings(texts)
 
 
-def index_chunks(business_id: str, chunks: List[str]):
+def index_chunks(
+    business_id: str,
+    chunks: List[str]
+):
     collection = get_collection()
-    embeddings = get_embeddings(chunks, task_type="search_document")
-    ids = [f"{business_id}_{i}_{abs(hash(chunk)) % 10**8}" for i, chunk in enumerate(chunks)]
 
+    business_id = str(business_id)
+
+    print(
+        f"[CHROMA] Starting indexing | "
+        f"Business={business_id} | "
+        f"Chunks={len(chunks)}"
+    )
+
+    if not chunks:
+        raise ValueError(
+            "No chunks received for indexing."
+        )
+
+    # STEP 1: Create embeddings
+    embeddings = get_embeddings(
+        chunks,
+        task_type="search_document"
+    )
+
+    print(
+        f"[CHROMA] Embeddings created: "
+        f"{len(embeddings)}"
+    )
+
+    if len(embeddings) != len(chunks):
+        raise ValueError(
+            f"Embedding count mismatch. "
+            f"Chunks={len(chunks)}, "
+            f"Embeddings={len(embeddings)}"
+        )
+
+    # STEP 2: Delete old document chunks
     try:
-        existing = collection.get(where={
-            "$and": [
-                {"business_id": {"$eq": business_id}},
-                {"chunk_type": {"$eq": "document"}},
-            ]
-        })
-        if existing["ids"]:
-            collection.delete(ids=existing["ids"])
-    except Exception:
-        try:
-            existing = collection.get(where={"business_id": business_id})
-            doc_ids = [id_ for id_ in existing["ids"] if not id_.startswith(f"{business_id}_admin_")]
-            if doc_ids:
-                collection.delete(ids=doc_ids)
-        except Exception:
-            pass
+        old = collection.get(
+            where={
+                "$and": [
+                    {
+                        "business_id": {
+                            "$eq": business_id
+                        }
+                    },
+                    {
+                        "chunk_type": {
+                            "$eq": "document"
+                        }
+                    }
+                ]
+            }
+        )
 
-    # Add to Chroma in smaller batches
-        chroma_batch_size = 50
-        
-        metadatas = [
+        old_ids = old.get("ids", [])
+
+        if old_ids:
+            print(
+                f"[CHROMA] Deleting "
+                f"{len(old_ids)} old chunks"
+            )
+
+            collection.delete(
+                ids=old_ids
+            )
+
+    except Exception as e:
+        print(
+            f"[CHROMA] Old-data cleanup warning: {e}"
+        )
+
+    # STEP 3: Prepare IDs and metadata
+    ids = []
+
+    metadatas = []
+
+    for i, chunk in enumerate(chunks):
+
+        chunk_id = (
+            f"{business_id}_doc_"
+            f"{i}_{abs(hash(chunk)) % 10**8}"
+        )
+
+        ids.append(chunk_id)
+
+        metadatas.append(
             {
                 "business_id": business_id,
                 "chunk_type": "document"
             }
-            for _ in chunks
-        ]
-        
-        for i in range(
-            0,
-            len(chunks),
-            chroma_batch_size
-        ):
-        
-            end = i + chroma_batch_size
-        
-            print(
-                f"[CHROMA] Indexing "
-                f"{i + 1}-"
-                f"{min(end, len(chunks))} "
-                f"of {len(chunks)}"
-            )
-        
-            collection.add(
-                documents=chunks[i:end],
-                embeddings=embeddings[i:end],
-                ids=ids[i:end],
-                metadatas=metadatas[i:end],
-            )
+        )
 
+    # STEP 4: Store in smaller batches
+    batch_size = 50
 
+    for start in range(
+        0,
+        len(chunks),
+        batch_size
+    ):
+
+        end = min(
+            start + batch_size,
+            len(chunks)
+        )
+
+        print(
+            f"[CHROMA] Saving "
+            f"{start + 1}-{end} "
+            f"of {len(chunks)}"
+        )
+
+        collection.upsert(
+            ids=ids[start:end],
+            documents=chunks[start:end],
+            embeddings=embeddings[start:end],
+            metadatas=metadatas[start:end],
+        )
+
+    # STEP 5: Verify immediately
+    verify = collection.get(
+        where={
+            "business_id": business_id
+        }
+    )
+
+    stored_count = len(
+        verify.get("ids", [])
+    )
+
+    print(
+        f"[CHROMA] VERIFY STORED CHUNKS: "
+        f"{stored_count}"
+    )
+
+    if stored_count == 0:
+        raise RuntimeError(
+            "Chroma indexing failed: "
+            "0 chunks found after upsert."
+        )
+
+    print(
+        "[CHROMA] INDEXING SUCCESS ✅"
+    )
 def index_admin_answer(business_id: str, question: str, qa_text: str):
     collection = get_collection()
     embedding = get_embeddings([qa_text], task_type="search_document")[0]
