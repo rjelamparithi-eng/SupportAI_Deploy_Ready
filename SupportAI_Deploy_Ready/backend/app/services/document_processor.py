@@ -2,7 +2,7 @@ import re
 from typing import List
 import io
 
-from app.services.web_crawler import crawl_website
+from app.services.web_crawler_firecrawl import crawl_website
 
 
 # ─── TEXT EXTRACTION ─────────────────────────────────────────────────────────
