@@ -73,8 +73,8 @@ async def process_url(url: str, crawl: bool = True) -> List[str]:
     # Always crawl multiple internal pages
     documents = await crawl_website(
         url,
-        max_pages=30,
-        max_depth=4
+        max_pages=100,
+        max_depth=5
     )
 
     print(f"[SCRAPER] Pages crawled: {len(documents)}")
