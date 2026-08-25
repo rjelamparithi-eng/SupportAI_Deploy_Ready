@@ -60,7 +60,259 @@ def normalize_url(
 # ─────────────────────────────────────────────
 # FIRECRAWL - JAVASCRIPT WEBSITE CRAWLER
 # ─────────────────────────────────────────────
+# ─────────────────────────────────────────────
+# FIRECRAWL URL DISCOVERY
+# ─────────────────────────────────────────────
 
+async def firecrawl_map(
+    url: str,
+    max_pages: int
+) -> list[str]:
+
+    print(f"[FIRECRAWL] Mapping website: {url}")
+
+    headers = {
+        "Authorization": f"Bearer {FIRECRAWL_API_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    # Start with max 30 pages while testing
+    limit = min(max_pages, 30)
+
+    payload = {
+        "url": url,
+        "sitemap": "include",
+        "includeSubdomains": True,
+        "ignoreQueryParameters": True,
+        "ignoreCache": True,
+        "limit": limit,
+        "timeout": 60000
+    }
+
+    async with httpx.AsyncClient(
+        timeout=70.0,
+        follow_redirects=True
+    ) as client:
+
+        response = await client.post(
+            f"{FIRECRAWL_BASE_URL}/v2/map",
+            headers=headers,
+            json=payload
+        )
+
+        response.raise_for_status()
+
+        data = response.json()
+
+    urls = []
+
+    for item in data.get("links", []) or []:
+
+        if isinstance(item, str):
+            page_url = item
+
+        elif isinstance(item, dict):
+            page_url = item.get("url")
+
+        else:
+            page_url = None
+
+        if page_url and page_url not in urls:
+            urls.append(page_url)
+
+    print(
+        f"[FIRECRAWL] Map discovered {len(urls)} URLs"
+    )
+
+    return urls[:limit]
+
+
+# ─────────────────────────────────────────────
+# FIRECRAWL BATCH SCRAPER
+# ─────────────────────────────────────────────
+
+async def firecrawl_batch_scrape(
+    urls: list[str]
+) -> list[CrawledDocument]:
+
+    if not urls:
+        return []
+
+    print(
+        f"[FIRECRAWL] Batch scraping {len(urls)} URLs"
+    )
+
+    headers = {
+        "Authorization": f"Bearer {FIRECRAWL_API_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    payload = {
+        "urls": urls,
+        "ignoreInvalidURLs": True,
+        "formats": ["markdown"],
+        "onlyMainContent": True,
+
+        # Give JavaScript time to render
+        "waitFor": 2000,
+
+        "timeout": 60000,
+
+        # Allow PDF parsing
+        "parsers": ["pdf"]
+    }
+
+    async with httpx.AsyncClient(
+        timeout=90.0,
+        follow_redirects=True
+    ) as client:
+
+        start_response = await client.post(
+            f"{FIRECRAWL_BASE_URL}/v2/batch/scrape",
+            headers=headers,
+            json=payload
+        )
+
+        start_response.raise_for_status()
+
+        start_data = start_response.json()
+
+        job_id = start_data.get("id")
+
+        if not job_id:
+            raise RuntimeError(
+                "Firecrawl batch scrape did not return job ID."
+            )
+
+        print(
+            f"[FIRECRAWL] Batch Job ID: {job_id}"
+        )
+
+        status_data = None
+
+        for _ in range(90):
+
+            await asyncio.sleep(2)
+
+            response = await client.get(
+                f"{FIRECRAWL_BASE_URL}/v2/batch/scrape/{job_id}",
+                headers=headers
+            )
+
+            response.raise_for_status()
+
+            status_data = response.json()
+
+            state = status_data.get("status")
+
+            completed = status_data.get(
+                "completed",
+                0
+            )
+
+            total = status_data.get(
+                "total",
+                0
+            )
+
+            print(
+                f"[FIRECRAWL] "
+                f"Batch Status={state} "
+                f"Completed={completed} "
+                f"Total={total}"
+            )
+
+            if state == "completed":
+                break
+
+            if state in {
+                "failed",
+                "cancelled"
+            }:
+                raise RuntimeError(
+                    f"Firecrawl batch scrape {state}"
+                )
+
+        else:
+            raise TimeoutError(
+                "Firecrawl batch scrape timed out."
+            )
+
+        documents = []
+
+        current = status_data or {}
+
+        while True:
+
+            data = current.get(
+                "data",
+                []
+            ) or []
+
+            for item in data:
+
+                markdown = (
+                    item.get("markdown")
+                    or ""
+                ).strip()
+
+                if not markdown:
+                    continue
+
+                metadata = (
+                    item.get("metadata")
+                    or {}
+                )
+
+                page_url = (
+                    metadata.get("sourceURL")
+                    or
+                    metadata.get("url")
+                    or
+                    ""
+                )
+
+                title = (
+                    metadata.get("title")
+                    or
+                    "Untitled"
+                )
+
+                documents.append(
+                    CrawledDocument(
+                        url=page_url,
+                        title=title,
+                        text=markdown,
+                        metadata={
+                            **metadata,
+                            "source_url": page_url,
+                            "title": title,
+                            "scrape_mode":
+                                "firecrawl-map-batch"
+                        }
+                    )
+                )
+
+            next_url = current.get("next")
+
+            if not next_url:
+                break
+
+            response = await client.get(
+                next_url,
+                headers=headers
+            )
+
+            response.raise_for_status()
+
+            current = response.json()
+
+    print(
+        f"[FIRECRAWL] Batch scraped "
+        f"{len(documents)} pages"
+    )
+
+    return documents
 async def firecrawl_crawl(
     url: str,
     max_pages: int,
@@ -499,10 +751,60 @@ async def crawl_website(
     max_depth: int = 5
 ) -> list[CrawledDocument]:
 
-    # Use Firecrawl first for JavaScript sites
+    print(f"[CRAWLER] Starting: {url}")
+
     if FIRECRAWL_API_KEY:
 
+        # ─── METHOD 1: MAP + BATCH SCRAPE ───
         try:
+
+            urls = await firecrawl_map(
+                url,
+                max_pages
+            )
+
+            print(
+                f"[CRAWLER] URLs discovered: "
+                f"{len(urls)}"
+            )
+
+            if len(urls) > 1:
+
+                documents = await firecrawl_batch_scrape(
+                    urls
+                )
+
+                if documents:
+
+                    print(
+                        "[CRAWLER] Map + Batch "
+                        f"success: {len(documents)} pages"
+                    )
+
+                    return documents
+
+            print(
+                "[CRAWLER] Map found too few URLs."
+            )
+
+        except Exception as e:
+
+            logger.exception(
+                "Firecrawl map/batch failed: %s",
+                e
+            )
+
+            print(
+                f"[FIRECRAWL] Map/Batch failed: {e}"
+            )
+
+        # ─── METHOD 2: NORMAL FIRECRAWL ───
+        try:
+
+            print(
+                "[CRAWLER] Trying normal "
+                "Firecrawl crawl..."
+            )
 
             documents = await firecrawl_crawl(
                 url,
@@ -511,20 +813,38 @@ async def crawl_website(
             )
 
             if documents:
+
+                print(
+                    "[CRAWLER] Normal Firecrawl "
+                    f"returned {len(documents)} pages"
+                )
+
                 return documents
 
         except Exception as e:
 
             logger.exception(
-                "Firecrawl failed: %s",
+                "Normal Firecrawl failed: %s",
                 e
             )
 
             print(
-                f"[FIRECRAWL] Failed: {e}"
+                f"[FIRECRAWL] Crawl failed: {e}"
             )
 
-    # Normal HTML fallback
+    else:
+
+        print(
+            "[CRAWLER] WARNING: "
+            "FIRECRAWL_API_KEY missing"
+        )
+
+    # ─── METHOD 3: NORMAL HTML FALLBACK ───
+
+    print(
+        "[CRAWLER] Using HTTP fallback"
+    )
+
     documents = await http_fallback(
         url,
         max_pages,
@@ -533,17 +853,8 @@ async def crawl_website(
 
     if not documents:
 
-        if not FIRECRAWL_API_KEY:
-            raise ValueError(
-                "This website requires "
-                "JavaScript. "
-                "FIRECRAWL_API_KEY "
-                "is not configured."
-            )
-
         raise ValueError(
-            "No website content could "
-            "be scraped."
+            "No website content could be scraped."
         )
 
     return documents
